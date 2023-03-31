@@ -2,36 +2,14 @@ package main
 
 import (
 	"context"
-	"github.com/go-redis/redis/v8"
 	"log"
 	"github.com/gin-gonic/gin"
+	"github.com/go-redis/redis/v8"
 )
 
 var limiter *Limiter
 
-// Implements RedisClient for redis.Client
-type redisClient struct {
-	*redis.Client
-}
-
-func (c *redisClient) RateDel(ctx context.Context, key string) error {
-	return c.Del(ctx, key).Err()
-}
-
-func (c *redisClient) RateEvalSha(ctx context.Context, sha1 string, keys []string, args ...interface{}) (interface{}, error) {
-	return c.EvalSha(ctx, sha1, keys, args...).Result()
-}
-
-func (c *redisClient) RateScriptLoad(ctx context.Context, script string) (string, error) {
-	return c.ScriptLoad(ctx, script).Result()
-}
-
-func (c *redisClient) RateSet(ctx context.Context, key string, max int) error {
-	return c.HSet(ctx, key, "lt", max).Err()
-}
-
-
-//curl "http://localhost:8080/request?username=lijunshi"
+//curl  -X POST "http://localhost:8080/request?username=lijunshi"
 func request(c *gin.Context) {
 	key := c.Query("username")
 
@@ -57,6 +35,67 @@ func request(c *gin.Context) {
 			"Use": res.Use,
 			"Total": res.Total,
 			"Strategy":res.Strategy,
+		})
+		return
+	}
+
+}
+
+//curl  -X POST "http://localhost:8080/del_limit?username=lijunshi&strategy=10-M"
+func delLimit(c *gin.Context) {
+	key := c.Query("username")
+	strategy := c.Query("strategy")
+
+	err := limiter.Remove(key, strategy)
+	if err != nil {
+		c.JSON(500, gin.H{
+			"msg": err.Error(),
+		})
+		return
+	} else {
+		c.JSON(200, gin.H{
+			"msg": "success",
+		})
+		return
+	}
+}
+
+//curl  -X POST "http://localhost:8080/set_limit?username=lijunshi&strategy=10-M&limit=20"
+func setLimit(c *gin.Context) {
+	key := c.Query("username")
+	strategy := c.Query("strategy")
+	newlimit := c.Query("limit")
+
+	err := limiter.Set(key, strategy, newlimit)
+	if err != nil {
+		c.JSON(500, gin.H{
+			"msg": err.Error(),
+		})
+		return
+	} else {
+		c.JSON(200, gin.H{
+			"msg": "success",
+		})
+		return
+	}
+
+}
+
+//curl  -X POST "http://localhost:8080/get_strategy?username=lijunshi&strategy=10-M"
+func getStrategy(c *gin.Context) {
+	key := c.Query("username")
+	strategy := c.Query("strategy")
+
+	use, total, err:= limiter.GetStrategy(key, strategy)
+	if err != nil {
+		c.JSON(500, gin.H{
+			"msg": err.Error(),
+		})
+		return
+	} else {
+		c.JSON(200, gin.H{
+			"use": use,
+			"total": total,
 		})
 		return
 	}
@@ -104,7 +143,10 @@ func main() {
 
 	r := gin.Default()
 
-	r.GET("/request", request)
+	r.POST("/request", request)
+	r.POST("/del_limit", delLimit)
+	r.POST("/set_limit", setLimit)
+	r.POST("/get_strategy", getStrategy)
 
 	r.Run(":8080")
 }

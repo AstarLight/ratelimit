@@ -7,13 +7,40 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"github.com/go-redis/redis/v8"
 )
 
 type RedisClient interface {
 	RateDel(context.Context, string) error
 	RateEvalSha(context.Context, string, []string, ...interface{}) (interface{}, error)
 	RateScriptLoad(context.Context, string) (string, error)
-	RateSet(ctx context.Context, key string, max int) error
+	RateSet(ctx context.Context, key string, max string) error
+	RateGet(ctx context.Context, key string) (interface{}, error)
+}
+
+// Implements RedisClient for redis.Client
+type redisClient struct {
+	*redis.Client
+}
+
+func (c *redisClient) RateDel(ctx context.Context, key string) error {
+	return c.Del(ctx, key).Err()
+}
+
+func (c *redisClient) RateEvalSha(ctx context.Context, sha1 string, keys []string, args ...interface{}) (interface{}, error) {
+	return c.EvalSha(ctx, sha1, keys, args...).Result()
+}
+
+func (c *redisClient) RateScriptLoad(ctx context.Context, script string) (string, error) {
+	return c.ScriptLoad(ctx, script).Result()
+}
+
+func (c *redisClient) RateSet(ctx context.Context, key string, max string) error {
+	return c.HSet(ctx, key, "lt", max).Err()
+}
+
+func (c *redisClient) RateGet(ctx context.Context, key string) (interface{}, error) {
+	return c.HMGet(ctx, key, "ct", "lt").Result()
 }
 
 // Limiter struct.
@@ -24,6 +51,8 @@ type Limiter struct {
 type abstractLimiter interface {
 	getLimit(key string) ([]interface{}, error)
 	removeLimit(key, strategy string) error
+	setLimit(id, strategy, newLimit string) error
+	onlyGet(id, strategy string) (interface{}, error)
 }
 
 type LimiterConf struct {
@@ -133,6 +162,23 @@ func (l *Limiter) Remove(key, strategy string) error {
 	return l.removeLimit(key, strategy)
 }
 
+func (l *Limiter) Set(key, strategy, newLimit string) error {
+	return l.setLimit(key, strategy, newLimit)
+}
+
+func (l *Limiter) GetStrategy(key, strategy string) (int, int, error) {
+	res, err := l.onlyGet(key, strategy)
+	fmt.Println(res)
+	arr := res.([]interface{})
+	if arr[0] == nil || arr[1] == nil {
+		return 0, 0, errors.New("no key")
+	}
+	use, _ := strconv.Atoi(arr[0].(string))
+	total, _ := strconv.Atoi(arr[1].(string))
+	return use, total, err
+	
+}
+
 type redisLimiter struct {
 	sha1  string
 	rc    RedisClient
@@ -150,8 +196,12 @@ func (r *redisLimiter) getFullKey(id, strategy string) string {
 }
 
 // 修改频率上限
-func (r *redisLimiter) SetLimit(max int, id, strategy string) error {
-	return r.rc.RateSet(r.ctx, r.getFullKey(id, strategy), max)
+func (r *redisLimiter) setLimit(id, strategy, newLimit string) error {
+	return r.rc.RateSet(r.ctx, r.getFullKey(id, strategy), newLimit)
+}
+
+func (r *redisLimiter) onlyGet(id, strategy string) (interface{}, error) {
+	return r.rc.RateGet(r.ctx, r.getFullKey(id, strategy))
 }
 
 func (r *redisLimiter) getLimit(key string) ([]interface{}, error) {
