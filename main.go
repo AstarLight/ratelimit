@@ -2,9 +2,9 @@ package main
 
 import (
 	"context"
-	"log"
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
+	"log"
 )
 
 var limiter *Limiter
@@ -31,10 +31,10 @@ func request(c *gin.Context) {
 	} else {
 		// 达到了访问限制阈值，
 		c.JSON(429, gin.H{
-			"msg": "Rate limit exceeded",
-			"Use": res.Use,
-			"Total": res.Total,
-			"Strategy":res.Strategy,
+			"msg":      "Rate limit exceeded",
+			"Use":      res.Use,
+			"Total":    res.Total,
+			"Strategy": res.Strategy,
 		})
 		return
 	}
@@ -86,7 +86,7 @@ func getStrategy(c *gin.Context) {
 	key := c.Query("username")
 	strategy := c.Query("strategy")
 
-	use, total, err:= limiter.GetStrategy(key, strategy)
+	use, total, err := limiter.GetStrategy(key, strategy)
 	if err != nil {
 		c.JSON(500, gin.H{
 			"msg": err.Error(),
@@ -94,7 +94,7 @@ func getStrategy(c *gin.Context) {
 		return
 	} else {
 		c.JSON(200, gin.H{
-			"use": use,
+			"use":   use,
 			"total": total,
 		})
 		return
@@ -117,7 +117,7 @@ func main() {
 		log.Println("connect redis succ")
 	}
 
-	// 配置的限流策略格式： "<limit>-<period>"", 
+	// 配置的限流策略格式： "<limit>-<period>"",
 	// periods:
 	//
 	// * "S": second
@@ -132,14 +132,18 @@ func main() {
 	// * 1000 reqs/hour: "1000-H"
 	// * 2000 reqs/day: "2000-D"
 
-	Strategies := []string{"5-S", "10-M", "50-H", "100-D"} // 限流策略配置，可配置一个或多个
+	strategies := map[string]int{
+		"Second": 5,
+		"Minute": 10,
+		"Hour":   1000,
+		"Day":    2000,
+	}
 
-	limiter = New(Options{
+	limiter = NewLimiter(Options{
 		Client: &redisClient{client},
-		Confs:  Strategies,
+		Confs:  strategies,
 		Ctx:    ctx,
 	})
-
 
 	r := gin.Default()
 

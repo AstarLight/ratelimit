@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/go-redis/redis/v8"
 	"strconv"
 	"strings"
 	"time"
-	"github.com/go-redis/redis/v8"
 )
 
 type RedisClient interface {
@@ -58,14 +58,14 @@ type abstractLimiter interface {
 type LimiterConf struct {
 	Max      string // 限流阈值
 	Duration string // 时间，单位是毫秒
-	Strategy string // 限流策略，如5-S表示1秒允许5个请求
+	Strategy string // 限流策略，如S表示1秒内
 }
 
 // Options for Limiter
 type Options struct {
 	Ctx    context.Context
-	Client RedisClient // Use a redis client for limiter, if omit, it will use a memory limiter.
-	Confs  []string
+	Client RedisClient    // Use a redis client for limiter, if omit, it will use a memory limiter.
+	Confs  map[string]int // key: Second/Minute/Hour/Day
 }
 
 // Result of limiter.Get
@@ -73,11 +73,11 @@ type Result struct {
 	Total      int    // 限流阈值
 	Use        int    // 当前已使用的个数
 	ReachLimit int    // 是否达到限制
-	Strategy   string // uid:5-S，当ReachLimit为1时，我们可以通过这个字段看出是哪个策略拦截
+	Strategy   string // S，当ReachLimit为1时，我们可以通过这个字段看出是哪个策略拦截
 }
 
-// New returns a Limiter instance with given options.
-func New(opts Options) *Limiter {
+// NewLimiter returns a Limiter instance with given options.
+func NewLimiter(opts Options) *Limiter {
 	return newRedisLimiter(&opts)
 }
 
@@ -114,21 +114,27 @@ func newRedisLimiter(opts *Options) *Limiter {
 		panic(err)
 	}
 
-	confs := []*LimiterConf{}
-	for _, strategy := range opts.Confs {
-		err, limit, period := SplitLimitPeriod(strategy)
-		if err != nil {
-			panic(err.Error())
-			return nil
-		}
+	periods := map[string]time.Duration{
+		"Second": time.Second,    // Second
+		"Minute": time.Minute,    // Minute
+		"Hour":   time.Hour,      // Hour
+		"Day":    time.Hour * 24, // Day
+	}
 
+	confs := map[string]*LimiterConf{}
+	for strategy, limit := range opts.Confs {
+		p, ok := periods[strategy]
+
+		if !ok {
+			panic("xx")
+		}
 		conf := &LimiterConf{
-			Max:      limit,
-			Duration: period,
+			Max:      fmt.Sprintf("%d", limit),
+			Duration: fmt.Sprintf("%d", int64(p/time.Millisecond)),
 			Strategy: strategy,
 		}
 
-		confs = append(confs, conf)
+		confs[strategy] = conf
 	}
 
 	r := &redisLimiter{
@@ -176,24 +182,18 @@ func (l *Limiter) GetStrategy(key, strategy string) (int, int, error) {
 	use, _ := strconv.Atoi(arr[0].(string))
 	total, _ := strconv.Atoi(arr[1].(string))
 	return use, total, err
-	
+
 }
 
 type redisLimiter struct {
 	sha1  string
 	rc    RedisClient
-	Confs []*LimiterConf
-	ctx context.Context
+	Confs map[string]*LimiterConf
+	ctx   context.Context
 }
 
 func (r *redisLimiter) removeLimit(key, strategy string) error {
-	newConfs := []*LimiterConf{}
-	for _, conf := range r.Confs {
-		if conf.Strategy != strategy {
-			newConfs = append(newConfs, conf)
-		}
-	}
-	r.Confs = newConfs
+	delete(r.Confs, strategy)
 	return r.rc.RateDel(r.ctx, r.getFullKey(key, strategy))
 }
 
@@ -204,12 +204,7 @@ func (r *redisLimiter) getFullKey(id, strategy string) string {
 
 // 修改频率上限
 func (r *redisLimiter) setLimit(id, strategy, newLimit string) error {
-	for i, conf := range r.Confs {
-		if conf.Strategy == strategy {
-			r.Confs[i].Max = newLimit
-			break;
-		}
-	}
+	r.Confs[strategy].Max = newLimit
 	return r.rc.RateSet(r.ctx, r.getFullKey(id, strategy), newLimit)
 }
 
@@ -220,12 +215,14 @@ func (r *redisLimiter) onlyGet(id, strategy string) (interface{}, error) {
 func (r *redisLimiter) getLimit(key string) ([]interface{}, error) {
 	args := make([]interface{}, len(r.Confs)*2, len(r.Confs)*2)
 	keys := make([]string, len(r.Confs), len(r.Confs))
-	for i, conf := range r.Confs {
+	i := 0
+	for Strategy, conf := range r.Confs {
 		args[i*2] = conf.Max
 		args[i*2+1] = conf.Duration
 
-		fullKey := r.getFullKey(key, conf.Strategy)
+		fullKey := r.getFullKey(key, Strategy)
 		keys[i] = fullKey // 238918319:5-M
+		i += 1
 	}
 
 	fmt.Println(keys)
