@@ -187,6 +187,13 @@ type redisLimiter struct {
 }
 
 func (r *redisLimiter) removeLimit(key, strategy string) error {
+	newConfs := []*LimiterConf{}
+	for _, conf := range r.Confs {
+		if conf.Strategy != strategy {
+			newConfs = append(newConfs, conf)
+		}
+	}
+	r.Confs = newConfs
 	return r.rc.RateDel(r.ctx, r.getFullKey(key, strategy))
 }
 
@@ -197,6 +204,12 @@ func (r *redisLimiter) getFullKey(id, strategy string) string {
 
 // 修改频率上限
 func (r *redisLimiter) setLimit(id, strategy, newLimit string) error {
+	for i, conf := range r.Confs {
+		if conf.Strategy == strategy {
+			r.Confs[i].Max = newLimit
+			break;
+		}
+	}
 	return r.rc.RateSet(r.ctx, r.getFullKey(id, strategy), newLimit)
 }
 
