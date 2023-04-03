@@ -139,7 +139,8 @@ func (l *Limiter) Remove(key, period string) error {
 	if !IsValidPeriod(period) {
 		return errInvalidPeriod
 	}
-	return l.removeLimit(key, period)
+	delete(l.Confs, period)
+	return l.rc.RateDel(l.ctx, l.getFullKey(key, period))
 }
 
 // 修改本地和redis hash 里的limit
@@ -147,7 +148,19 @@ func (l *Limiter) Set(key, period, newLimit string) error {
 	if !IsValidPeriod(period) {
 		return errInvalidPeriod
 	}
-	return l.setLimit(key, period, newLimit)
+	if _, ok := l.Confs[period]; !ok {
+		p, _ := gPeriods[period]
+		conf := &LimiterConf{
+			Max:      newLimit,
+			Duration: fmt.Sprintf("%d", int64(p/time.Millisecond)),
+			Period:   period,
+		}
+
+		l.Confs[period] = conf
+		return nil
+	}
+	l.Confs[period].Max = newLimit
+	return l.rc.RateSet(l.ctx, l.getFullKey(key, period), newLimit)
 }
 
 // 只是Get数据，不会自增
@@ -166,38 +179,11 @@ func (l *Limiter) GetNowCnt(key, period string) (int, int, error) {
 
 }
 
-func (l *Limiter) removeLimit(key, period string) error {
-	if !IsValidPeriod(period) {
-		return errInvalidPeriod
-	}
-	delete(l.Confs, period)
-	return l.rc.RateDel(l.ctx, l.getFullKey(key, period))
-}
 
 func (l *Limiter) getFullKey(id, period string) string {
-
 	return fmt.Sprintf("%s:%s", id, period)
 }
 
-// 修改频率上限
-func (l *Limiter) setLimit(id, period, newLimit string) error {
-	if !IsValidPeriod(period) {
-		return errInvalidPeriod
-	}
-	if _, ok := l.Confs[period]; !ok {
-		p, _ := gPeriods[period]
-		conf := &LimiterConf{
-			Max:      newLimit,
-			Duration: fmt.Sprintf("%d", int64(p/time.Millisecond)),
-			Period:   period,
-		}
-
-		l.Confs[period] = conf
-		return nil
-	}
-	l.Confs[period].Max = newLimit
-	return l.rc.RateSet(l.ctx, l.getFullKey(id, period), newLimit)
-}
 
 func (l *Limiter) getPeriod(id, period string) (interface{}, error) {
 	return l.rc.RateGet(l.ctx, l.getFullKey(id, period))
