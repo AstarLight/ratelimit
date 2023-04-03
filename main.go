@@ -31,22 +31,22 @@ func request(c *gin.Context) {
 	} else {
 		// 达到了访问限制阈值，
 		c.JSON(429, gin.H{
-			"msg":      "Rate limit exceeded",
-			"Use":      res.Use,
-			"Total":    res.Total,
-			"Strategy": res.Strategy,
+			"msg":    "Rate limit exceeded",
+			"Use":    res.Use,    // 已使用的次数
+			"Total":  res.Total,  // 周期内总共可使用次数
+			"Period": res.Period, // 时间周期, 看出是哪个策略拦截的
 		})
 		return
 	}
 
 }
 
-//curl  -X POST "http://localhost:8080/del_limit?username=lijunshi&strategy=10-M"
+//curl  -X POST "http://localhost:8080/del_limit?username=lijunshi&period=Minute"
 func delLimit(c *gin.Context) {
 	key := c.Query("username")
-	strategy := c.Query("strategy")
+	period := c.Query("period")
 
-	err := limiter.Remove(key, strategy)
+	err := limiter.Remove(key, period)
 	if err != nil {
 		c.JSON(500, gin.H{
 			"msg": err.Error(),
@@ -60,13 +60,13 @@ func delLimit(c *gin.Context) {
 	}
 }
 
-//curl  -X POST "http://localhost:8080/set_limit?username=lijunshi&strategy=10-M&limit=20"
+//curl  -X POST "http://localhost:8080/set_limit?username=lijunshi&period=Minute&limit=20"
 func setLimit(c *gin.Context) {
 	key := c.Query("username")
-	strategy := c.Query("strategy")
+	period := c.Query("period")
 	newlimit := c.Query("limit")
 
-	err := limiter.Set(key, strategy, newlimit)
+	err := limiter.Set(key, period, newlimit)
 	if err != nil {
 		c.JSON(500, gin.H{
 			"msg": err.Error(),
@@ -81,12 +81,12 @@ func setLimit(c *gin.Context) {
 
 }
 
-//curl  -X POST "http://localhost:8080/get_strategy?username=lijunshi&strategy=10-M"
-func getStrategy(c *gin.Context) {
+//curl  "http://localhost:8080/get_cnt?username=lijunshi&period=Minute"
+func getCnt(c *gin.Context) {
 	key := c.Query("username")
-	strategy := c.Query("strategy")
+	period := c.Query("period")
 
-	use, total, err := limiter.GetStrategy(key, strategy)
+	use, total, err := limiter.GetNowCnt(key, period)
 	if err != nil {
 		c.JSON(500, gin.H{
 			"msg": err.Error(),
@@ -117,26 +117,12 @@ func main() {
 		log.Println("connect redis succ")
 	}
 
-	// 配置的限流策略格式： "<limit>-<period>"",
-	// periods:
-	//
-	// * "S": second
-	// * "M": minute
-	// * "H": hour
-	// * "D": day
-	//
-	// Examples:
-	//
-	// * 5 reqs/second: "5-S"
-	// * 10 reqs/minute: "10-M"
-	// * 1000 reqs/hour: "1000-H"
-	// * 2000 reqs/day: "2000-D"
-
+	// 配置的限流策略
 	strategies := map[string]int{
-		"Second": 5,
-		"Minute": 10,
-		"Hour":   1000,
-		"Day":    2000,
+		"Second": 5, // 每秒限制5次请求
+		"Minute": 10, // 每分钟限制10次请求
+		"Hour":   1000, // 每小时限制1000次请求
+		"Day":    2000, // 天限制2000次请求
 	}
 
 	limiter = NewLimiter(Options{
@@ -150,7 +136,7 @@ func main() {
 	r.POST("/request", request)
 	r.POST("/del_limit", delLimit)
 	r.POST("/set_limit", setLimit)
-	r.POST("/get_strategy", getStrategy)
+	r.GET("/get_cnt", getCnt)
 
 	r.Run(":8080")
 }
