@@ -1,4 +1,4 @@
-module github.com/AstarLight/ratelimit
+module ratelimit
 
 go 1.18
 

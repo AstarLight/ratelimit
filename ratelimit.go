@@ -1,4 +1,4 @@
-package ratelimit
+package main
 
 import (
 	"context"
@@ -20,18 +20,70 @@ var gPeriods = map[string]time.Duration{
 var (
 	errInvalidPeriod = errors.New("invalid period")
 )
-/*
-type RedisClient interface {
-	RateDel(context.Context, string) error
-	RateEvalSha(context.Context, string, []string, ...interface{}) (interface{}, error)
-	RateScriptLoad(context.Context, string) (string, error)
-	RateSet(ctx context.Context, key string, max string) error
-	RateGet(ctx context.Context, key string) (interface{}, error)
-}*/
 
 // Implements RedisClient for redis.Client
 type RedisClient struct {
 	*redis.Client
+}
+
+// Limiter struct.
+type Limiter struct {
+	sha1  string
+	rc    RedisClient
+	Confs map[string]*LimiterConf
+	ctx   context.Context
+}
+
+type LimiterConf struct {
+	Max      string // 限流阈值
+	Duration string // 时间，单位是毫秒
+	Period   string // 限流策略周期，如Second表示1秒内   Second/Minute/Hour/Day
+}
+
+// Options for Limiter
+type Options struct {
+	Ctx    context.Context
+	Client RedisClient
+	Confs  map[string]int // key: Second/Minute/Hour/Day  val: limit value
+}
+
+// Result of limiter.Get
+type Result struct {
+	Total      int    // 限流阈值, 当ReachLimit为1时生效
+	Use        int    // 当前已使用的个数, 当ReachLimit为1时生效
+	ReachLimit int    // 是否达到限制
+	Period     string // Second/Minute/Hour/Day，当ReachLimit为1时生效，我们可以通过这个字段看出是哪个策略拦截
+}
+
+func NewLimiter(opts Options) *Limiter {
+	sha1, err := opts.Client.RateScriptLoad(opts.Ctx, lua)
+	if err != nil {
+		panic(err)
+	}
+
+	confs := map[string]*LimiterConf{}
+	for period, limit := range opts.Confs {
+		p, ok := gPeriods[period]
+
+		if !ok {
+			panic("invalid period conf")
+		}
+		conf := &LimiterConf{
+			Max:      fmt.Sprintf("%d", limit),
+			Duration: fmt.Sprintf("%d", int64(p/time.Millisecond)),
+			Period:   period,
+		}
+
+		confs[period] = conf
+	}
+
+	r := &Limiter{
+		rc:    opts.Client,
+		sha1:  sha1,
+		Confs: confs,
+		ctx:   opts.Ctx,
+	}
+	return r
 }
 
 func (c *RedisClient) RateDel(ctx context.Context, key string) error {
@@ -62,75 +114,6 @@ func IsValidPeriod(period string) bool {
 	}
 
 	return true
-}
-
-// Limiter struct.
-type Limiter struct {
-	abstractLimiter
-}
-
-type abstractLimiter interface {
-	getLimit(key string) ([]interface{}, error)
-	removeLimit(key, period string) error
-	setLimit(id, period, newLimit string) error
-	getPeroid(id, period string) (interface{}, error)
-}
-
-type LimiterConf struct {
-	Max      string // 限流阈值
-	Duration string // 时间，单位是毫秒
-	Period   string // 限流策略周期，如Second表示1秒内   Second/Minute/Hour/Day
-}
-
-// Options for Limiter
-type Options struct {
-	Ctx    context.Context
-	Client RedisClient    // Use a redis client for limiter, if omit, it will use a memory limiter.
-	Confs  map[string]int // key: Second/Minute/Hour/Day  val: limit value
-}
-
-// Result of limiter.Get
-type Result struct {
-	Total      int    // 限流阈值, 当ReachLimit为1时生效
-	Use        int    // 当前已使用的个数, 当ReachLimit为1时生效
-	ReachLimit int    // 是否达到限制
-	Period     string // Second/Minute/Hour/Day，当ReachLimit为1时生效，我们可以通过这个字段看出是哪个策略拦截
-}
-
-// NewLimiter returns a Limiter instance with given options.
-func NewLimiter(opts Options) *Limiter {
-	return newRedisLimiter(&opts)
-}
-
-func newRedisLimiter(opts *Options) *Limiter {
-	sha1, err := opts.Client.RateScriptLoad(opts.Ctx, lua)
-	if err != nil {
-		panic(err)
-	}
-
-	confs := map[string]*LimiterConf{}
-	for period, limit := range opts.Confs {
-		p, ok := gPeriods[period]
-
-		if !ok {
-			panic("invalid period conf")
-		}
-		conf := &LimiterConf{
-			Max:      fmt.Sprintf("%d", limit),
-			Duration: fmt.Sprintf("%d", int64(p/time.Millisecond)),
-			Period:   period,
-		}
-
-		confs[period] = conf
-	}
-
-	r := &redisLimiter{
-		rc:    opts.Client,
-		sha1:  sha1,
-		Confs: confs,
-		ctx:   opts.Ctx,
-	}
-	return &Limiter{r}
 }
 
 // Get而且会自增
@@ -172,7 +155,7 @@ func (l *Limiter) GetNowCnt(key, period string) (int, int, error) {
 	if !IsValidPeriod(period) {
 		return 0, 0, errInvalidPeriod
 	}
-	res, err := l.getPeroid(key, period)
+	res, err := l.getPeriod(key, period)
 	arr := res.([]interface{})
 	if arr[0] == nil || arr[1] == nil {
 		return 0, 0, errors.New("no key")
@@ -183,32 +166,25 @@ func (l *Limiter) GetNowCnt(key, period string) (int, int, error) {
 
 }
 
-type redisLimiter struct {
-	sha1  string
-	rc    RedisClient
-	Confs map[string]*LimiterConf
-	ctx   context.Context
-}
-
-func (r *redisLimiter) removeLimit(key, period string) error {
+func (l *Limiter) removeLimit(key, period string) error {
 	if !IsValidPeriod(period) {
 		return errInvalidPeriod
 	}
-	delete(r.Confs, period)
-	return r.rc.RateDel(r.ctx, r.getFullKey(key, period))
+	delete(l.Confs, period)
+	return l.rc.RateDel(l.ctx, l.getFullKey(key, period))
 }
 
-func (r *redisLimiter) getFullKey(id, period string) string {
+func (l *Limiter) getFullKey(id, period string) string {
 
 	return fmt.Sprintf("%s:%s", id, period)
 }
 
 // 修改频率上限
-func (r *redisLimiter) setLimit(id, period, newLimit string) error {
+func (l *Limiter) setLimit(id, period, newLimit string) error {
 	if !IsValidPeriod(period) {
 		return errInvalidPeriod
 	}
-	if _, ok := r.Confs[period]; !ok {
+	if _, ok := l.Confs[period]; !ok {
 		p, _ := gPeriods[period]
 		conf := &LimiterConf{
 			Max:      newLimit,
@@ -216,38 +192,38 @@ func (r *redisLimiter) setLimit(id, period, newLimit string) error {
 			Period:   period,
 		}
 
-		r.Confs[period] = conf
+		l.Confs[period] = conf
 		return nil
 	}
-	r.Confs[period].Max = newLimit
-	return r.rc.RateSet(r.ctx, r.getFullKey(id, period), newLimit)
+	l.Confs[period].Max = newLimit
+	return l.rc.RateSet(l.ctx, l.getFullKey(id, period), newLimit)
 }
 
-func (r *redisLimiter) getPeroid(id, period string) (interface{}, error) {
-	return r.rc.RateGet(r.ctx, r.getFullKey(id, period))
+func (l *Limiter) getPeriod(id, period string) (interface{}, error) {
+	return l.rc.RateGet(l.ctx, l.getFullKey(id, period))
 }
 
-func (r *redisLimiter) getLimit(key string) ([]interface{}, error) {
-	args := make([]interface{}, len(r.Confs)*2, len(r.Confs)*2)
-	keys := make([]string, len(r.Confs), len(r.Confs))
+func (l *Limiter) getLimit(key string) ([]interface{}, error) {
+	args := make([]interface{}, len(l.Confs)*2, len(l.Confs)*2)
+	keys := make([]string, len(l.Confs), len(l.Confs))
 	i := 0
-	for Period, conf := range r.Confs {
+	for Period, conf := range l.Confs {
 		args[i*2] = conf.Max
 		args[i*2+1] = conf.Duration
 
-		fullKey := r.getFullKey(key, Period)
+		fullKey := l.getFullKey(key, Period)
 		keys[i] = fullKey // 238918319:M
 		i += 1
 	}
 
 	//fmt.Println(keys)
 	//fmt.Println(args)
-	res, err := r.rc.RateEvalSha(r.ctx, r.sha1, keys, args...)
+	res, err := l.rc.RateEvalSha(l.ctx, l.sha1, keys, args...)
 	if err != nil && isNoScriptErr(err) {
 		// try to load lua for cluster client and ring client for nodes changing.
-		_, err = r.rc.RateScriptLoad(r.ctx, lua)
+		_, err = l.rc.RateScriptLoad(l.ctx, lua)
 		if err == nil {
-			res, err = r.rc.RateEvalSha(r.ctx, r.sha1, keys, args...)
+			res, err = l.rc.RateEvalSha(l.ctx, l.sha1, keys, args...)
 		}
 	}
 

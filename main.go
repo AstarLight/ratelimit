@@ -5,10 +5,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
 	"log"
-	"github.com/AstarLight/ratelimit"
 )
 
-var limiter *ratelimit.Limiter
+var limiter *Limiter
 
 //curl  -X POST "http://localhost:8080/request?username=lijunshi"
 func request(c *gin.Context) {
@@ -120,14 +119,13 @@ func main() {
 
 	// 配置的限流策略
 	strategies := map[string]int{
-		"Second": 5, // 每秒限制5次请求
-		"Minute": 10, // 每分钟限制10次请求
+		"Second": 5,    // 每秒限制5次请求
+		"Minute": 10,   // 每分钟限制10次请求
 		"Hour":   1000, // 每小时限制1000次请求
 		"Day":    2000, // 天限制2000次请求
 	}
-
-	limiter = ratelimit.NewLimiter(ratelimit.Options{
-		Client: &ratelimit.RedisClient{client},
+	limiter = NewLimiter(Options{
+		Client: RedisClient{client},
 		Confs:  strategies,
 		Ctx:    ctx,
 	})
