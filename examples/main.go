@@ -5,9 +5,10 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
 	"log"
+	"github.com/AstarLight/ratelimit"
 )
 
-var limiter *Limiter
+var limiter *ratelimit.Limiter
 
 //curl  -X POST "http://localhost:8080/request?username=lijunshi"
 func request(c *gin.Context) {
@@ -125,8 +126,8 @@ func main() {
 		"Day":    2000, // 天限制2000次请求
 	}
 
-	limiter = NewLimiter(Options{
-		Client: &redisClient{client},
+	limiter = ratelimit.NewLimiter(ratelimit.Options{
+		Client: &ratelimit.RedisClient{client},
 		Confs:  strategies,
 		Ctx:    ctx,
 	})

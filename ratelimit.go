@@ -1,4 +1,4 @@
-package main
+package ratelimit
 
 import (
 	"context"
@@ -20,37 +20,37 @@ var gPeriods = map[string]time.Duration{
 var (
 	errInvalidPeriod = errors.New("invalid period")
 )
-
+/*
 type RedisClient interface {
 	RateDel(context.Context, string) error
 	RateEvalSha(context.Context, string, []string, ...interface{}) (interface{}, error)
 	RateScriptLoad(context.Context, string) (string, error)
 	RateSet(ctx context.Context, key string, max string) error
 	RateGet(ctx context.Context, key string) (interface{}, error)
-}
+}*/
 
 // Implements RedisClient for redis.Client
-type redisClient struct {
+type RedisClient struct {
 	*redis.Client
 }
 
-func (c *redisClient) RateDel(ctx context.Context, key string) error {
+func (c *RedisClient) RateDel(ctx context.Context, key string) error {
 	return c.Del(ctx, key).Err()
 }
 
-func (c *redisClient) RateEvalSha(ctx context.Context, sha1 string, keys []string, args ...interface{}) (interface{}, error) {
+func (c *RedisClient) RateEvalSha(ctx context.Context, sha1 string, keys []string, args ...interface{}) (interface{}, error) {
 	return c.EvalSha(ctx, sha1, keys, args...).Result()
 }
 
-func (c *redisClient) RateScriptLoad(ctx context.Context, script string) (string, error) {
+func (c *RedisClient) RateScriptLoad(ctx context.Context, script string) (string, error) {
 	return c.ScriptLoad(ctx, script).Result()
 }
 
-func (c *redisClient) RateSet(ctx context.Context, key string, max string) error {
+func (c *RedisClient) RateSet(ctx context.Context, key string, max string) error {
 	return c.HSet(ctx, key, "lt", max).Err()
 }
 
-func (c *redisClient) RateGet(ctx context.Context, key string) (interface{}, error) {
+func (c *RedisClient) RateGet(ctx context.Context, key string) (interface{}, error) {
 	return c.HMGet(ctx, key, "ct", "lt").Result()
 }
 
