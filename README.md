@@ -8,6 +8,7 @@ rate limiter base on redis
 - 支持Second/Minute/Hour/Day的一个或多个的配置
 - 支持运行时修改和删除限流器的限流阈值配置
 
+设计方案：https://zhuanlan.zhihu.com/p/619530958
 
 分布式限流的例子
 ```
