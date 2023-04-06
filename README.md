@@ -11,7 +11,7 @@ rate limiter base on redis
 设计方案：https://zhuanlan.zhihu.com/p/619530958
 
 分布式限流的例子
-```
+```go
 package main
 
 import (
